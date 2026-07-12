@@ -36,9 +36,7 @@ retail-pipeline/
 ---
 
 ## Step 1 — Get the dataset out of Kaggle
-
-You mentioned the dataset is available at
-`/kaggle/input/datasets/cgrymn/online-retail-ii-uci-dataset` — that path
+Dataset is available at `/kaggle/input/datasets/cgrymn/online-retail-ii-uci-dataset` — that path
 only exists **inside a Kaggle notebook**. GitHub Actions runs on GitHub's
 own servers, which have no access to Kaggle's filesystem, so the dataset
 needs to physically live in your repo.
@@ -72,7 +70,7 @@ needs to physically live in your repo.
 ## Step 2 — Create your Neon database
 
 **Process (no code required):**
-1. Go to [neon.tech](https://neon.tech) and sign up (free, no credit card).
+1. Go to [neon.tech](https://console.neon.tech) and sign up (free, no credit card).
 2. Create a new project — any name, e.g. `retail-pipeline`.
 3. On the project dashboard, find the **connection string** (it looks like
    `postgresql://user:password@ep-xxxx.neon.tech/dbname?sslmode=require`).
@@ -84,7 +82,7 @@ needs to physically live in your repo.
 
 ```bash
 git clone <your-repo-url>
-cd retail-pipeline
+cd dir
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -262,13 +260,4 @@ platform-native automation.
 | GitHub Actions run fails on `pip install` | Check `requirements.txt` was committed and the workflow's `working-directory` matches your folder layout |
 | Grafana shows "no data" | Confirm the data source's SSL mode is `require`, and that you ran the ETL at least once so `fact_sales` isn't empty |
 
----
 
-## How to talk about this project
-
-> I built an automated pipeline that loads and cleans retail transaction
-> data on a schedule, keeps a live Postgres warehouse in sync, and
-> automatically flags products with shrinking profit margins — posting a
-> written recommendation to Slack without anyone needing to check a
-> report. The dashboard and alerting are two independent consumers of the
-> same warehouse, not a single monolithic tool.

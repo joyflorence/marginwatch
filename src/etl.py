@@ -10,8 +10,8 @@ Two ways to point this at your data, controlled by the DATA_PATH env var:
 2. Running in GitHub Actions (the automated, scheduled version):
    Kaggle's /kaggle/input path does not exist on a GitHub Actions runner.
    Export the cleaned/raw file from Kaggle once, commit it to this repo
-   under data/online_retail_ii.csv, and set:
-   DATA_PATH=data/online_retail_ii.csv
+   under data/online_retail_ii.xlsx, and set:
+   DATA_PATH=data/online_retail_ii.xlsx
    (see README.md, "Getting the dataset out of Kaggle" section)
 
 This script is idempotent: every run truncates and reloads all tables.
@@ -30,7 +30,9 @@ from db import get_connection, bulk_upsert
 
 random.seed(42)  # reproducible synthetic costs across runs
 
-DATA_PATH = os.environ.get("DATA_PATH", "data/online_retail_ii.csv")
+DATA_PATH = os.environ.get("DATA_PATH", "data/online_retail_ii.xlsx")
+print("DATA_PATH =", DATA_PATH)
+print("Exists =", os.path.exists(DATA_PATH))
 
 
 # ---------------------------------------------------------

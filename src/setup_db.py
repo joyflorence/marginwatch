@@ -12,3 +12,4 @@ if __name__ == "__main__":
     run_sql_file(conn, "sql/schema.sql")
     conn.close()
     print("Schema created successfully.")
+    

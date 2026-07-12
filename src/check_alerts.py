@@ -19,7 +19,7 @@ import os
 import requests
 from db import get_connection
 
-MARGIN_DROP_THRESHOLD_PCT = 15.0  # flag if margin fell more than this, week over week
+MARGIN_DROP_THRESHOLD_PCT = 5.0  # flag if margin fell more than this, week over week
 
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")  # optional

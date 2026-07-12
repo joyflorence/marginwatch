@@ -7,7 +7,9 @@ only exists in one place.
 import os
 import psycopg2
 from psycopg2.extras import execute_values
+from dotenv import load_dotenv
 
+load_dotenv()
 
 def get_connection():
     """
