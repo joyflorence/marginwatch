@@ -24,7 +24,7 @@ jobs:
         working-directory: src
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DATA_PATH: ${{ secrets.DATA_PATH || 'data/online_retail_ii.csv' }}
+          DATA_PATH: ${{ secrets.DATA_PATH || 'data/online_retail_ii.xlsx' }}
         run: python etl.py
 
       - name: Run alert check
