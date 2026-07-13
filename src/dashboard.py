@@ -144,4 +144,4 @@ alerts = run_query("""
 if alerts.empty:
     st.info("No alerts have fired yet.")
 else:
-    st.dataframe(alerts, width="stretch")
+    st.dataframe(alerts, use_container_width=True)
