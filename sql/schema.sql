@@ -8,6 +8,7 @@ DROP TABLE IF EXISTS dim_customer CASCADE;
 DROP TABLE IF EXISTS dim_date CASCADE;
 DROP TABLE IF EXISTS dim_location CASCADE;
 DROP TABLE IF EXISTS alert_log CASCADE;
+DROP TABLE IF EXISTS etl_control CASCADE;
 
 -- ---------------------------------------------------------
 -- Dimension: Product
@@ -73,6 +74,19 @@ CREATE TABLE fact_sales (
 CREATE INDEX idx_fact_sales_date ON fact_sales(date_id);
 CREATE INDEX idx_fact_sales_product ON fact_sales(stock_code);
 CREATE INDEX idx_fact_sales_customer ON fact_sales(customer_id);
+
+-- ---------------------------------------------------------
+-- ETL control: tracks how far the incremental replay has
+-- gotten through the historical dataset. This is what turns
+-- a static one-time load into an ongoing, evolving pipeline —
+-- each scheduled run picks up where the last one left off.
+-- ---------------------------------------------------------
+CREATE TABLE etl_control (
+    id               INT PRIMARY KEY DEFAULT 1,
+    last_loaded_date DATE,           -- NULL means nothing loaded yet
+    CONSTRAINT single_row CHECK (id = 1)
+);
+INSERT INTO etl_control (id, last_loaded_date) VALUES (1, NULL);
 
 -- ---------------------------------------------------------
 -- Alert log: every alert the automation layer has ever fired

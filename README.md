@@ -36,7 +36,9 @@ retail-pipeline/
 ---
 
 ## Step 1 — Get the dataset out of Kaggle
-Dataset is available at `/kaggle/input/datasets/cgrymn/online-retail-ii-uci-dataset` — that path
+
+Dataset is available at
+`/kaggle/input/datasets/cgrymn/online-retail-ii-uci-dataset` — that path
 only exists **inside a Kaggle notebook**. GitHub Actions runs on GitHub's
 own servers, which have no access to Kaggle's filesystem, so the dataset
 needs to physically live in your repo.
@@ -70,7 +72,7 @@ needs to physically live in your repo.
 ## Step 2 — Create your Neon database
 
 **Process (no code required):**
-1. Go to [neon.tech](https://console.neon.tech) and sign up (free, no credit card).
+1. Go to [neon.tech](https://neon.tech) and sign up (free, no credit card).
 2. Create a new project — any name, e.g. `retail-pipeline`.
 3. On the project dashboard, find the **connection string** (it looks like
    `postgresql://user:password@ep-xxxx.neon.tech/dbname?sslmode=require`).
@@ -82,7 +84,7 @@ needs to physically live in your repo.
 
 ```bash
 git clone <your-repo-url>
-cd dir
+cd retail-pipeline
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -214,38 +216,56 @@ publicly-visible automation run — not a claim in a README.
 
 ---
 
-## Step 10 — Connect Grafana Cloud
+## Step 10 — Run the dashboard (Streamlit)
 
-**Process (no code required):**
-1. Sign up free at [grafana.com](https://grafana.com/products/cloud/) (no card required).
-2. In your Grafana Cloud instance, go to **Connections** → **Data sources** → **Add data source** → search **PostgreSQL**.
-3. Fill in the connection fields using the *pieces* of your Neon connection
-   string (host, database name, username, password) rather than the full
-   URL — Grafana wants them split out:
-   - Host: the `ep-xxxx.neon.tech` part, with port `5432`
-   - Database: your database name
-   - User / Password: from your connection string
-   - TLS/SSL mode: **require**
-4. Click **Save & test** — you should see a green success message.
-5. Create a new dashboard → **Add visualization** → select your new
-   PostgreSQL data source → write a query, e.g.:
-   ```sql
-   SELECT date_id AS time, SUM(revenue) AS revenue
-   FROM fact_sales
-   GROUP BY date_id
-   ORDER BY date_id
+**Local test first:**
+1. Create `.streamlit/secrets.toml` in your project root with:
+   ```toml
+   DATABASE_URL = "postgresql://user:password@ep-xxxx.neon.tech/dbname?sslmode=require"
    ```
-6. Repeat for a few more panels: revenue by country, top products by
-   profit, etc. Since Grafana queries Neon live, the dashboard reflects
-   whatever is in the warehouse after your last GitHub Actions run — no
-   manual refresh needed.
+   (this file is git-ignored — never commit it)
+2. Run:
+   ```bash
+   streamlit run src/dashboard.py
+   ```
+   This opens the dashboard at `localhost:8501`, reading live from Neon.
 
-**Bonus:** Grafana Cloud has built-in alerting. You can optionally recreate
-the margin-drop alert as a native Grafana alert rule (Alerting → Alert
-rules → New rule) pointed at the same Slack channel, as a second,
-config-only path alongside your custom Python script. Mentioning both in
-an interview shows you understand the trade-off between code-based and
-platform-native automation.
+**Deploy free on Streamlit Community Cloud:**
+1. Push `src/dashboard.py` and the updated `requirements.txt` to GitHub.
+2. Go to [share.streamlit.io](https://share.streamlit.io) → sign in with GitHub.
+3. **New app** → select your repo → set main file path to `src/dashboard.py`.
+4. Under **Advanced settings → Secrets**, paste the same `DATABASE_URL = "..."` line as above.
+5. **Deploy** — you get a public URL (e.g. `yourapp.streamlit.app`). Because it queries Neon live, it reflects new data automatically after every pipeline run, with no manual republishing.
+
+---
+
+## Step 11 — Understanding the incremental replay
+
+The Online Retail II dataset is static (2009–2011), but the pipeline doesn't
+reload it wholesale every run — that would make every scheduled run
+identical and pointless to automate. Instead, each run loads the **next
+slice** of the historical timeline (controlled by `CHUNK_DAYS`, default 30
+days) into `fact_sales`, picking up exactly where the last run left off via
+the `etl_control` table. When the replay reaches the end of the dataset's
+date range, it automatically wraps around and starts again from the
+earliest date — so the pipeline runs indefinitely without any manual reset.
+
+This means:
+- `fact_sales` genuinely grows after every run — nothing is truncated.
+- `check_alerts.py`'s "last 7 days vs. prior 7 days" comparison becomes
+  meaningful over time, since each run actually adds new rows.
+- If you want to see it evolve faster while testing, temporarily lower
+  `CHUNK_DAYS` (e.g. to `7`) and manually trigger the GitHub Actions
+  workflow a few times in a row (Step 9) to watch the dashboard and alerts
+  change between runs.
+
+**Important:** if you already ran `setup_db.py` before this feature was
+added, run it again — the schema now includes an `etl_control` table:
+```bash
+python src/setup_db.py
+```
+This drops and recreates all tables, so any previously loaded data is
+wiped and the replay starts fresh from the earliest date. That's expected.
 
 ---
 

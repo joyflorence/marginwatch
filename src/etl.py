@@ -2,37 +2,34 @@
 etl.py — reads the Online Retail II dataset, cleans it, and loads it into
 the star schema in Neon Postgres.
 
-Two ways to point this at your data, controlled by the DATA_PATH env var:
-
-1. Running inside a Kaggle notebook (exploration / first test run):
-   DATA_PATH=/kaggle/input/datasets/cgrymn/online-retail-ii-uci-dataset
-
-2. Running in GitHub Actions (the automated, scheduled version):
-   Kaggle's /kaggle/input path does not exist on a GitHub Actions runner.
-   Export the cleaned/raw file from Kaggle once, commit it to this repo
-   under data/online_retail_ii.xlsx, and set:
-   DATA_PATH=data/online_retail_ii.xlsx
-   (see README.md, "Getting the dataset out of Kaggle" section)
-
-This script is idempotent: every run truncates and reloads all tables.
-That's a deliberate simplification for a portfolio project — it avoids
-duplicate-row logic and keeps the warehouse always in sync with the
-current source file. A production system would load incrementally instead.
+INCREMENTAL REPLAY — this is what makes a static historical file behave
+like an ongoing data feed:
+Rather than reloading the whole dataset every run (which would make every
+run identical and pointless to automate), each run loads the *next slice*
+of the historical timeline into fact_sales — controlled by CHUNK_DAYS
+(default 30, i.e. roughly a month of transactions per run) — picking up
+exactly where the previous run left off, tracked in the etl_control table.
+Dimension tables (product/customer/date/location) are still safely
+re-upserted from the full file every run, since that's cheap and avoids
+missing a dimension row a later chunk needs.
+When the replay reaches the end of the dataset's real date range, it wraps
+around and starts again from the earliest date — so the pipeline can run
+indefinitely without you touching it, which is the point of a demo like this.
 """
 
 import os
 import glob
 import random
 import pandas as pd
-from datetime import datetime
+from datetime import timedelta
 
 from db import get_connection, bulk_upsert
+from psycopg2.extras import execute_values
 
 random.seed(42)  # reproducible synthetic costs across runs
 
 DATA_PATH = os.environ.get("DATA_PATH", "data/online_retail_ii.xlsx")
-print("DATA_PATH =", DATA_PATH)
-print("Exists =", os.path.exists(DATA_PATH))
+CHUNK_DAYS = int(os.environ.get("CHUNK_DAYS", "30"))
 
 
 # ---------------------------------------------------------
@@ -112,7 +109,6 @@ def clean_data(df):
 # ---------------------------------------------------------
 def add_simulated_cost(df):
     """
-    IMPORTANT — read this before presenting the project:
     The Online Retail II dataset has sale price but no cost data, so there is
     no real profit figure to compute. To demonstrate the profitability
     analysis this project is built around, we simulate a unit cost as a
@@ -128,7 +124,9 @@ def add_simulated_cost(df):
 
 
 # ---------------------------------------------------------
-# 4. Build dimension tables
+# 4. Build dimension tables (from the FULL file, every run —
+#    cheap, and guarantees no chunk ever references a missing
+#    product/customer/date/location row)
 # ---------------------------------------------------------
 def build_dimensions(df):
     dim_product = (
@@ -166,59 +164,99 @@ def build_dimensions(df):
     return dim_product, dim_customer, dim_date, dim_location
 
 
-# ---------------------------------------------------------
-# 5. Load everything into Postgres
-# ---------------------------------------------------------
-def load_to_warehouse(df, dim_product, dim_customer, dim_date, dim_location):
-    conn = get_connection()
-
-    print("Truncating existing tables (idempotent reload)...")
-    with conn.cursor() as cur:
-        cur.execute(
-            "TRUNCATE TABLE fact_sales, dim_product, dim_customer, dim_date, dim_location RESTART IDENTITY CASCADE"
-        )
-    conn.commit()
-
-    print(f"Loading {len(dim_location)} locations...")
+def load_dimensions(conn, dim_product, dim_customer, dim_date, dim_location):
+    print(f"Upserting {len(dim_location)} locations...")
     bulk_upsert(conn, "dim_location", ["country"],
                 list(dim_location.itertuples(index=False, name=None)),
                 conflict_col="country")
 
-    # Pull generated location_ids back so fact_sales can reference them
     with conn.cursor() as cur:
         cur.execute("SELECT location_id, country FROM dim_location")
         location_map = {country: loc_id for loc_id, country in cur.fetchall()}
 
-    print(f"Loading {len(dim_product)} products...")
+    print(f"Upserting {len(dim_product)} products...")
     bulk_upsert(conn, "dim_product",
                 ["stock_code", "description", "unit_cost", "first_seen_date"],
                 list(dim_product.itertuples(index=False, name=None)),
-                conflict_col="stock_code")
+                conflict_col="stock_code",
+                update_cols=["description", "unit_cost"])
 
-    print(f"Loading {len(dim_customer)} customers...")
+    print(f"Upserting {len(dim_customer)} customers...")
     bulk_upsert(conn, "dim_customer",
                 ["customer_id", "country", "first_order_date"],
                 list(dim_customer.itertuples(index=False, name=None)),
                 conflict_col="customer_id")
 
-    print(f"Loading {len(dim_date)} dates...")
+    print(f"Upserting {len(dim_date)} dates...")
     bulk_upsert(conn, "dim_date",
                 ["date_id", "year", "quarter", "month", "month_name",
                  "week", "day_of_week", "is_weekend"],
                 list(dim_date.itertuples(index=False, name=None)),
                 conflict_col="date_id")
 
-    print(f"Loading {len(df)} fact_sales rows...")
-    df["location_id"] = df["country"].map(location_map)
-    df["date_id"] = df["invoice_date"].dt.date
+    return location_map
 
-    fact_rows = list(df[[
+
+# ---------------------------------------------------------
+# 5. Work out which slice of history to load this run
+# ---------------------------------------------------------
+def get_next_chunk(conn, df, chunk_days=CHUNK_DAYS):
+    min_date = df["invoice_date"].dt.date.min()
+    max_date = df["invoice_date"].dt.date.max()
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT last_loaded_date FROM etl_control WHERE id = 1")
+        row = cur.fetchone()
+        last_loaded_date = row[0] if row else None
+
+    if last_loaded_date is None:
+        start_date = min_date
+        print(f"First run — starting replay from {start_date}")
+    elif last_loaded_date >= max_date:
+        start_date = min_date
+        print(f"Reached the end of the dataset ({max_date}) — "
+              f"wrapping around and restarting replay from {start_date}")
+    else:
+        start_date = last_loaded_date + timedelta(days=1)
+
+    end_date = min(start_date + timedelta(days=chunk_days - 1), max_date)
+
+    print(f"Loading transactions from {start_date} to {end_date} "
+          f"({chunk_days}-day chunk)")
+
+    mask = (df["invoice_date"].dt.date >= start_date) & (df["invoice_date"].dt.date <= end_date)
+    chunk = df.loc[mask].copy()
+
+    return chunk, end_date
+
+
+def update_control(conn, end_date):
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE etl_control SET last_loaded_date = %s WHERE id = 1",
+            (end_date,),
+        )
+    conn.commit()
+
+
+# ---------------------------------------------------------
+# 6. Load the chunk's fact rows (append-only — nothing is truncated)
+# ---------------------------------------------------------
+def load_fact_chunk(conn, chunk, location_map):
+    if chunk.empty:
+        print("This chunk has no rows (unlikely, but nothing to load).")
+        return
+
+    chunk["location_id"] = chunk["country"].map(location_map)
+    chunk["date_id"] = chunk["invoice_date"].dt.date
+
+    fact_rows = list(chunk[[
         "invoice_no", "stock_code", "customer_id", "date_id", "location_id",
         "quantity", "price", "unit_cost", "revenue", "profit", "is_return"
     ]].itertuples(index=False, name=None))
 
+    print(f"Inserting {len(fact_rows)} fact_sales rows for this run...")
     with conn.cursor() as cur:
-        from psycopg2.extras import execute_values
         execute_values(
             cur,
             """INSERT INTO fact_sales
@@ -229,17 +267,26 @@ def load_to_warehouse(df, dim_product, dim_customer, dim_date, dim_location):
             page_size=1000,
         )
     conn.commit()
-    conn.close()
-    print("ETL run complete.")
 
 
 def main():
     df = load_raw_data(DATA_PATH)
     df = clean_data(df)
     df = add_simulated_cost(df)
+
+    conn = get_connection()
+
     dim_product, dim_customer, dim_date, dim_location = build_dimensions(df)
-    load_to_warehouse(df, dim_product, dim_customer, dim_date, dim_location)
+    location_map = load_dimensions(conn, dim_product, dim_customer, dim_date, dim_location)
+
+    chunk, end_date = get_next_chunk(conn, df)
+    load_fact_chunk(conn, chunk, location_map)
+    update_control(conn, end_date)
+
+    conn.close()
+    print("ETL run complete.")
 
 
 if __name__ == "__main__":
     main()
+
