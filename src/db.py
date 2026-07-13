@@ -9,7 +9,25 @@ import psycopg2
 from psycopg2.extras import execute_values
 from dotenv import load_dotenv
 
+try:
+    import streamlit as st
+except ImportError:  # pragma: no cover
+    st = None
+
 load_dotenv()
+
+
+def _get_secret(name):
+    value = os.environ.get(name)
+    if value:
+        return value
+    if st is not None:
+        try:
+            return st.secrets.get(name)
+        except Exception:
+            return None
+    return None
+
 
 def get_connection():
     """
@@ -22,7 +40,7 @@ def get_connection():
     as an environment variable in the workflow file — see
     .github/workflows/pipeline.yml
     """
-    db_url = os.environ.get("DATABASE_URL")
+    db_url = _get_secret("DATABASE_URL")
     if not db_url:
         raise RuntimeError(
             "DATABASE_URL is not set. Set it in your .env file locally, "

@@ -19,10 +19,28 @@ import os
 import requests
 from db import get_connection
 
+try:
+    import streamlit as st
+except ImportError:  # pragma: no cover
+    st = None
+
 MARGIN_DROP_THRESHOLD_PCT = 5.0  # flag if margin fell more than this, week over week
 
-SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")  # optional
+
+def _get_secret(name):
+    value = os.environ.get(name)
+    if value:
+        return value
+    if st is not None:
+        try:
+            return st.secrets.get(name)
+        except Exception:
+            return None
+    return None
+
+
+SLACK_WEBHOOK_URL = _get_secret("SLACK_WEBHOOK_URL")
+ANTHROPIC_API_KEY = _get_secret("ANTHROPIC_API_KEY")  # optional
 
 
 MARGIN_DROP_QUERY = """
