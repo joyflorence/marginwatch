@@ -10,6 +10,8 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine
 
+from check_alerts import main as run_alerts
+
 st.set_page_config(page_title="Retail Decision Dashboard", layout="wide")
 
 
@@ -29,6 +31,17 @@ def run_query(sql):
 
 st.title("Retail Decision Dashboard")
 st.caption("Live view of the data from the warehouse — refreshes automatically after every pipeline run.")
+
+st.subheader("Alert Actions")
+if st.button("Run margin alert check"):
+    with st.spinner("Checking for margin drops and sending alerts..."):
+        try:
+            run_alerts()
+            st.success("Alert check completed.")
+        except Exception as exc:
+            st.error(f"Alert check failed: {exc}")
+
+st.divider()
 
 # ---- KPI row ----
 kpis = run_query("""
