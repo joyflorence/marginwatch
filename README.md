@@ -20,7 +20,7 @@ retail-pipeline/
 ├── .env.example
 ├── .gitignore
 ├── data/                        <- you create this, see Step 1
-│   └── online_retail_ii.csv
+│   └── online_retail_ii.xlsx
 ├── sql/
 │   └── schema.sql               <- run once to create the star schema
 ├── src/
