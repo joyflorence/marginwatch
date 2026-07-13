@@ -8,10 +8,13 @@ Deployed for free on Streamlit Community Cloud (see README for steps).
 import os
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.exc import PendingRollbackError
 
 from check_alerts import main as run_alerts
 
+load_dotenv()
 st.set_page_config(page_title="Retail Decision Dashboard", layout="wide")
 
 
@@ -21,25 +24,26 @@ def get_engine():
     if not db_url:
         st.error("DATABASE_URL not found in environment or Streamlit secrets.")
         st.stop()
-    return create_engine(db_url)
+    return create_engine(db_url, pool_pre_ping=True)
 
 
 @st.cache_data(ttl=300)  # refresh every 5 minutes, avoids hammering the DB
 def run_query(sql):
-    return pd.read_sql(sql, get_engine())
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql(sql, conn)
+    except PendingRollbackError:
+        with engine.connect() as conn:
+            conn.rollback()
+            return pd.read_sql(sql, conn)
+    except Exception as exc:
+        st.warning(f"Could not load dashboard data: {exc}")
+        return pd.DataFrame()
 
 
 st.title("Retail Decision Dashboard")
 st.caption("Live view of the data from the warehouse — refreshes automatically after every pipeline run.")
-
-st.subheader("Alert Actions")
-if st.button("Run margin alert check"):
-    with st.spinner("Checking for margin drops and sending alerts..."):
-        try:
-            run_alerts()
-            st.success("Alert check completed.")
-        except Exception as exc:
-            st.error(f"Alert check failed: {exc}")
 
 st.divider()
 
@@ -148,6 +152,14 @@ st.divider()
 
 # ---- Alert history ----
 st.subheader("Recent Automated Alerts")
+if st.button("Run margin alert check", key="alert_button"):
+    with st.spinner("Checking for margin drops and sending alerts..."):
+        try:
+            run_alerts()
+            st.success("Alert check completed.")
+        except Exception as exc:
+            st.error(f"Alert check failed: {exc}")
+
 alerts = run_query("""
     SELECT triggered_at, stock_code, message
     FROM alert_log
