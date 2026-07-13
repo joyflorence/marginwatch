@@ -3,3 +3,5 @@ psycopg2-binary==2.9.9
 requests==2.32.3
 python-dotenv==1.0.1
 openpyxl==3.1.5
+streamlit==1.39.0
+SQLAlchemy==2.0.36
