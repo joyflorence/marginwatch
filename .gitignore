@@ -4,4 +4,4 @@ __pycache__/
 *.pyc
 .DS_Store
 venv/
-.note_on_project
+.note_on_project/
