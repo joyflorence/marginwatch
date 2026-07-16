@@ -111,8 +111,7 @@ manually in your shell.)
 Run this once:
 
 ```bash
-cd src
-python setup_db.py
+python src/setup_db.py
 ```
 
 You should see `Schema created successfully.` If you get a connection
@@ -124,11 +123,11 @@ error, double check the connection string was copied in full, including
 ## Step 5 — Run the pipeline locally (first test)
 
 ```bash
-cd src
-python etl.py
+python src/etl.py
 ```
 
-This reads `data/online_retail_ii.csv`, cleans it, and loads it into Neon.
+This reads `data/online_retail_ii.xlsx`, cleans it, and loads every
+available historical year into Neon on the first run.
 You should see progress lines for each table, ending in
 `ETL run complete.`
 
@@ -143,7 +142,7 @@ Meridian Retail's actual margins.
 Then test the alert logic:
 
 ```bash
-python check_alerts.py
+python src/check_alerts.py
 ```
 
 If nothing is flagged, that's normal — it depends on whether any product's
@@ -239,33 +238,33 @@ publicly-visible automation run — not a claim in a README.
 
 ---
 
-## Step 11 — Understanding the incremental replay
+## Step 11 — Historical backfill and incremental loads
 
-The Online Retail II dataset is static (2009–2011), but the pipeline doesn't
-reload it wholesale every run — that would make every scheduled run
-identical and pointless to automate. Instead, each run loads the **next
-slice** of the historical timeline (controlled by `CHUNK_DAYS`, default 30
-days) into `fact_sales`, picking up exactly where the last run left off via
-the `etl_control` table. When the replay reaches the end of the dataset's
-date range, it automatically wraps around and starts again from the
-earliest date — so the pipeline runs indefinitely without any manual reset.
+The warehouse keeps historical years and adds new data; it never cycles back
+through old rows. On the first ETL run, `CHUNK_DAYS=0` (the default) loads
+the full available history, so the dashboard can immediately show every year
+in the source file. `etl_control` records the latest loaded source date.
 
-This means:
-- `fact_sales` genuinely grows after every run — nothing is truncated.
-- `check_alerts.py`'s "last 7 days vs. prior 7 days" comparison becomes
-  meaningful over time, since each run actually adds new rows.
-- If you want to see it evolve faster while testing, temporarily lower
-  `CHUNK_DAYS` (e.g. to `7`) and manually trigger the GitHub Actions
-  workflow a few times in a row (Step 9) to watch the dashboard and alerts
-  change between runs.
+On later runs, the pipeline only selects source dates newer than that date.
+Each fact row also has a deterministic source key with a database uniqueness
+constraint, so re-running the same input cannot duplicate revenue, profit,
+or orders. If a newer source file is placed at `DATA_PATH`, its newer rows
+are appended while the earlier years remain available for comparison.
 
-**Important:** if you already ran `setup_db.py` before this feature was
-added, run it again — the schema now includes an `etl_control` table:
+The included Online Retail II file is static (2009–2011), so daily runs will
+correctly report that there are no newer rows until the source is replaced or
+extended. To demonstrate a gradual initial load instead, set `CHUNK_DAYS` to
+a positive number such as `30`; each run will then add the next date range
+once, with no wrap-around or repeated history.
+
+**Schema update:** the revised fact table adds `source_row_key` and the alert
+log records one margin alert per product and analysis period. If your
+database was created with an earlier schema, run the setup command once:
 ```bash
 python src/setup_db.py
 ```
-This drops and recreates all tables, so any previously loaded data is
-wiped and the replay starts fresh from the earliest date. That's expected.
+It intentionally drops and recreates this demo warehouse, so take a backup
+first if you need to retain an existing database.
 
 ---
 

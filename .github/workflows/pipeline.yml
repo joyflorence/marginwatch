@@ -21,16 +21,14 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run ETL
-        working-directory: src
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DATA_PATH: ${{ secrets.DATA_PATH || 'data/online_retail_ii.xlsx' }}
-        run: python etl.py
+        run: python src/etl.py
 
       - name: Run alert check
-        working-directory: src
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python check_alerts.py
+        run: python src/check_alerts.py

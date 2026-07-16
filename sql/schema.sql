@@ -8,6 +8,8 @@ DROP TABLE IF EXISTS dim_customer CASCADE;
 DROP TABLE IF EXISTS dim_date CASCADE;
 DROP TABLE IF EXISTS dim_location CASCADE;
 DROP TABLE IF EXISTS alert_log CASCADE;
+DROP TABLE IF EXISTS etl_quality_check CASCADE;
+DROP TABLE IF EXISTS etl_run_log CASCADE;
 DROP TABLE IF EXISTS etl_control CASCADE;
 
 -- ---------------------------------------------------------
@@ -68,6 +70,7 @@ CREATE TABLE fact_sales (
     revenue         NUMERIC(12, 2) NOT NULL,
     profit          NUMERIC(12, 2),
     is_return       BOOLEAN DEFAULT FALSE,
+    source_row_key  VARCHAR(64) NOT NULL UNIQUE,
     loaded_at       TIMESTAMP DEFAULT NOW()
 );
 
@@ -76,10 +79,9 @@ CREATE INDEX idx_fact_sales_product ON fact_sales(stock_code);
 CREATE INDEX idx_fact_sales_customer ON fact_sales(customer_id);
 
 -- ---------------------------------------------------------
--- ETL control: tracks how far the incremental replay has
--- gotten through the historical dataset. This is what turns
--- a static one-time load into an ongoing, evolving pipeline —
--- each scheduled run picks up where the last one left off.
+-- ETL control: records the most recent source date successfully loaded.
+-- Historical rows stay in fact_sales; later ETL runs only append rows
+-- from newer source dates (with a unique source key as a second safeguard).
 -- ---------------------------------------------------------
 CREATE TABLE etl_control (
     id               INT PRIMARY KEY DEFAULT 1,
@@ -87,6 +89,39 @@ CREATE TABLE etl_control (
     CONSTRAINT single_row CHECK (id = 1)
 );
 INSERT INTO etl_control (id, last_loaded_date) VALUES (1, NULL);
+
+-- ---------------------------------------------------------
+-- ETL audit: one record per pipeline execution, plus its
+-- data-quality checks. These tables make each load observable
+-- and provide a durable explanation for a failed run.
+-- ---------------------------------------------------------
+CREATE TABLE etl_run_log (
+    run_id              BIGSERIAL PRIMARY KEY,
+    started_at          TIMESTAMP NOT NULL DEFAULT NOW(),
+    finished_at         TIMESTAMP,
+    status              VARCHAR(20) NOT NULL,
+    source_path         TEXT NOT NULL,
+    source_rows         INT,
+    clean_rows          INT,
+    candidate_fact_rows INT,
+    inserted_fact_rows  INT,
+    rejected_rows       INT,
+    last_source_date    DATE,
+    error_message       TEXT
+);
+
+CREATE TABLE etl_quality_check (
+    quality_check_id BIGSERIAL PRIMARY KEY,
+    run_id           BIGINT NOT NULL REFERENCES etl_run_log(run_id) ON DELETE CASCADE,
+    check_name       VARCHAR(100) NOT NULL,
+    status           VARCHAR(20) NOT NULL,
+    observed_value   INT,
+    details          TEXT,
+    checked_at       TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_etl_run_log_started_at ON etl_run_log(started_at DESC);
+CREATE INDEX idx_etl_quality_check_run_id ON etl_quality_check(run_id);
 
 -- ---------------------------------------------------------
 -- Alert log: every alert the automation layer has ever fired
@@ -99,5 +134,8 @@ CREATE TABLE alert_log (
     alert_type   VARCHAR(50),
     stock_code   VARCHAR(20),
     message      TEXT,
-    metric_value NUMERIC(12, 2)
+    metric_value NUMERIC(12, 2),
+    period_end   DATE NOT NULL,
+    CONSTRAINT unique_margin_alert_per_period
+        UNIQUE (alert_type, stock_code, period_end)
 );

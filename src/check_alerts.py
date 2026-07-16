@@ -24,7 +24,7 @@ try:
 except ImportError:  # pragma: no cover
     st = None
 
-MARGIN_DROP_THRESHOLD_PCT = 5.0  # flag if margin fell more than this, week over week
+MARGIN_DROP_THRESHOLD_PCT = 10.0  # flag if margin fell more than this, week over week
 
 
 def _get_secret(name):
@@ -70,6 +70,7 @@ prior_week AS (
 SELECT
     r.stock_code,
     p.description,
+    ref_date.max_date AS period_end,
     prior.revenue  AS prior_revenue,
     recent.revenue AS recent_revenue,
     CASE WHEN prior.revenue > 0 THEN prior.profit / prior.revenue * 100 ELSE NULL END AS prior_margin_pct,
@@ -78,6 +79,7 @@ FROM recent_week recent
 JOIN prior_week prior ON recent.stock_code = prior.stock_code
 JOIN dim_product p ON p.stock_code = recent.stock_code
 JOIN recent_week r ON r.stock_code = recent.stock_code
+CROSS JOIN ref_date
 WHERE prior.revenue > 50  -- ignore near-zero-volume products, too noisy
   AND prior.profit / NULLIF(prior.revenue, 0) * 100
       - recent.profit / NULLIF(recent.revenue, 0) * 100 > %s
@@ -151,17 +153,23 @@ def send_to_slack(message):
         print("SLACK_WEBHOOK_URL not set — printing alert instead of sending:")
         print(message)
         return
-    requests.post(SLACK_WEBHOOK_URL, json={"text": message}, timeout=10)
+    response = requests.post(SLACK_WEBHOOK_URL, json={"text": message}, timeout=10)
+    response.raise_for_status()
 
 
 def log_alert(conn, row, message):
     with conn.cursor() as cur:
         cur.execute(
-            """INSERT INTO alert_log (alert_type, stock_code, message, metric_value)
-               VALUES (%s, %s, %s, %s)""",
-            ("margin_drop", row["stock_code"], message, row["recent_margin_pct"]),
+            """INSERT INTO alert_log
+               (alert_type, stock_code, message, metric_value, period_end)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (alert_type, stock_code, period_end) DO NOTHING
+               RETURNING alert_id""",
+            ("margin_drop", row["stock_code"], message, row["recent_margin_pct"], row["period_end"]),
         )
+        inserted = cur.fetchone() is not None
     conn.commit()
+    return inserted
 
 
 def main():
@@ -176,8 +184,10 @@ def main():
     print(f"{len(flagged)} product(s) flagged.")
     for row in flagged:
         message = draft_recommendation(row)
+        if not log_alert(conn, row, message):
+            print(f"Alert for {row['stock_code']} already logged for this period.")
+            continue
         send_to_slack(f":rotating_light: *Margin alert*\n{message}")
-        log_alert(conn, row, message)
         print(f"Alerted on {row['stock_code']}: {message}")
 
     conn.close()
