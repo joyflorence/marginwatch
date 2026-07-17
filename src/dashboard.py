@@ -12,8 +12,6 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.exc import PendingRollbackError
 
-from check_alerts import main as run_alerts
-
 load_dotenv()
 st.set_page_config(page_title="Retail Decision Dashboard", layout="wide")
 
@@ -39,7 +37,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-page = st.sidebar.radio("View", ["Selected Period", "Full History"], index=0)
+page = st.sidebar.radio("View", ["Selected Period", "Full History"], index=1)
 
 
 @st.cache_resource
@@ -325,8 +323,6 @@ if page == "Selected Period":
         f"Top 10 registered customers account for {concentration:.1f}% of registered-customer revenue."
     )
 
-    render_demand_outlook()
-
     st.subheader("Revenue Over Time")
     trend = run_query(f"""
         SELECT date_id AS date, SUM(revenue) AS revenue
@@ -367,13 +363,10 @@ if page == "Selected Period":
             st.bar_chart(top_customers.set_index("customer_id"))
 
     st.subheader("Recent Automated Alerts")
-    if st.button("Run margin alert check", key="alert_button"):
-        with st.spinner("Checking for margin drops and sending alerts..."):
-            try:
-                run_alerts()
-                st.success("Alert check completed.")
-            except Exception as exc:
-                st.error(f"Alert check failed: {exc}")
+    st.caption(
+        "Margin and forecast checks run automatically after each scheduled ETL job. "
+        "Keeping delivery outside the dashboard prevents a viewer from triggering Slack alerts."
+    )
 
     alerts = run_query(f"""
         SELECT triggered_at, stock_code, message
