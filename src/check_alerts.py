@@ -96,6 +96,38 @@ def find_margin_drops(conn):
     return rows
 
 
+def find_forecast_risks(conn):
+    """Return only high-confidence demand-decline predictions from the latest run."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                WITH latest_run AS (
+                    SELECT forecast_run_id
+                    FROM forecast_run
+                    WHERE status = 'completed'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                )
+                SELECT fs.stock_code, p.description, fs.forecast_week AS period_end,
+                       fs.forecast_revenue, fs.expected_change_pct,
+                       fs.confidence_score
+                FROM forecast_sales fs
+                JOIN latest_run lr ON lr.forecast_run_id = fs.forecast_run_id
+                JOIN dim_product p ON p.stock_code = fs.stock_code
+                WHERE fs.risk_level = 'high'
+                ORDER BY fs.expected_change_pct ASC
+                LIMIT 5
+            """)
+            cols = [c.name for c in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as exc:
+        # Forecasting is an enhancement: missing forecast tables must not
+        # stop the established margin-monitoring path.
+        conn.rollback()
+        print(f"Forecast-risk check skipped: {exc}")
+        return []
+
+
 def draft_recommendation(row):
     """
     Turns a flagged row into a short written recommendation.
@@ -157,7 +189,17 @@ def send_to_slack(message):
     response.raise_for_status()
 
 
-def log_alert(conn, row, message):
+def alert_already_logged(conn, alert_type, row):
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT 1 FROM alert_log
+               WHERE alert_type = %s AND stock_code = %s AND period_end = %s""",
+            (alert_type, row["stock_code"], row["period_end"]),
+        )
+        return cur.fetchone() is not None
+
+
+def log_alert(conn, alert_type, row, message, metric_value):
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO alert_log
@@ -165,32 +207,55 @@ def log_alert(conn, row, message):
                VALUES (%s, %s, %s, %s, %s)
                ON CONFLICT (alert_type, stock_code, period_end) DO NOTHING
                RETURNING alert_id""",
-            ("margin_drop", row["stock_code"], message, row["recent_margin_pct"], row["period_end"]),
+            (alert_type, row["stock_code"], message, metric_value, row["period_end"]),
         )
         inserted = cur.fetchone() is not None
     conn.commit()
     return inserted
 
 
+def send_and_log_alert(conn, alert_type, row, message, metric_value, heading):
+    """Only mark alerts complete after their Slack delivery succeeds."""
+    if alert_already_logged(conn, alert_type, row):
+        print(f"Alert for {row['stock_code']} already logged for this period.")
+        return False
+    send_to_slack(f":rotating_light: *{heading}*\n{message}")
+    log_alert(conn, alert_type, row, message, metric_value)
+    return True
+
+
 def main():
     conn = get_connection()
     flagged = find_margin_drops(conn)
+    try:
+        print(f"{len(flagged)} product(s) flagged for margin change.")
+        for row in flagged:
+            message = draft_recommendation(row)
+            if send_and_log_alert(
+                conn, "margin_drop", row, message, row["recent_margin_pct"], "Margin alert"
+            ):
+                print(f"Alerted on {row['stock_code']}: {message}")
 
-    if not flagged:
-        print("No margin drops above threshold this run.")
+        forecast_risks = find_forecast_risks(conn)
+        print(f"{len(forecast_risks)} high-confidence demand risk(s) found.")
+        for row in forecast_risks:
+            message = (
+                f"Product {row['stock_code']} ({row['description']}) is forecast to generate "
+                f"£{row['forecast_revenue']:,.0f} next week, a {row['expected_change_pct']:.1f}% "
+                f"change from its recent four-week average. Model confidence: "
+                f"{row['confidence_score']:.0%}. Review demand, stock, and promotion plans."
+            )
+            if send_and_log_alert(
+                conn,
+                "forecast_demand_drop",
+                row,
+                message,
+                row["expected_change_pct"],
+                "Demand forecast alert",
+            ):
+                print(f"Forecast alert sent for {row['stock_code']}: {message}")
+    finally:
         conn.close()
-        return
-
-    print(f"{len(flagged)} product(s) flagged.")
-    for row in flagged:
-        message = draft_recommendation(row)
-        if not log_alert(conn, row, message):
-            print(f"Alert for {row['stock_code']} already logged for this period.")
-            continue
-        send_to_slack(f":rotating_light: *Margin alert*\n{message}")
-        print(f"Alerted on {row['stock_code']}: {message}")
-
-    conn.close()
 
 
 if __name__ == "__main__":

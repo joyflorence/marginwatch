@@ -17,6 +17,28 @@ from check_alerts import main as run_alerts
 load_dotenv()
 st.set_page_config(page_title="Retail Decision Dashboard", layout="wide")
 
+# KPI cards use Streamlit's native bordered container, with just enough
+# spacing to distinguish each metric without turning the dashboard into a
+# grid of heavy panels.
+st.markdown(
+    """
+    <style>
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background: rgba(250, 250, 252, 0.7);
+        border-color: rgba(49, 51, 63, 0.14);
+        border-radius: 0.6rem;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stMetric"] {
+        padding: 0.15rem 0.25rem;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricLabel"] {
+        margin-bottom: 0.15rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 page = st.sidebar.radio("View", ["Selected Period", "Full History"], index=0)
 
 
@@ -69,14 +91,15 @@ def get_alert_year_filter_clause(selected_year):
 
 
 def render_kpi_card(title, value, help_text="", delta=None, delta_description=None):
-    """Keep KPI rows compact while exposing definitions in a tooltip."""
-    st.metric(
-        title,
-        value,
-        delta=delta,
-        help=help_text or None,
-        delta_description=delta_description,
-    )
+    """Render a compact, scannable KPI card with optional supporting detail."""
+    with st.container(border=True):
+        st.metric(
+            title,
+            value,
+            delta=delta,
+            help=help_text or None,
+            delta_description=delta_description,
+        )
 
 
 def percentage_change(current, previous):
@@ -127,6 +150,100 @@ def get_data_freshness():
         FROM fact_sales
     """)
     return freshness.iloc[0] if not freshness.empty else None
+
+
+def get_latest_forecast_summary():
+    return run_query("""
+        WITH latest_run AS (
+            SELECT forecast_run_id, forecast_week, backtest_wape, sku_count
+            FROM forecast_run
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+        SELECT
+            latest_run.forecast_week,
+            latest_run.backtest_wape,
+            latest_run.sku_count,
+            SUM(fs.forecast_revenue) AS forecast_revenue,
+            COUNT(*) FILTER (WHERE fs.risk_level = 'high') AS high_risk_skus
+        FROM latest_run
+        JOIN forecast_sales fs ON fs.forecast_run_id = latest_run.forecast_run_id
+        GROUP BY latest_run.forecast_week, latest_run.backtest_wape, latest_run.sku_count
+    """)
+
+
+def get_latest_forecast_risks():
+    return run_query("""
+        WITH latest_run AS (
+            SELECT forecast_run_id
+            FROM forecast_run
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+        SELECT
+            fs.stock_code AS "Product code",
+            p.description AS "Product",
+            fs.forecast_revenue AS "Forecast revenue",
+            fs.lower_revenue AS "Lower range",
+            fs.upper_revenue AS "Upper range",
+            fs.expected_change_pct AS "Expected change %",
+            fs.confidence_score * 100 AS "Confidence %"
+        FROM forecast_sales fs
+        JOIN latest_run lr ON lr.forecast_run_id = fs.forecast_run_id
+        JOIN dim_product p ON p.stock_code = fs.stock_code
+        WHERE fs.risk_level = 'high'
+        ORDER BY fs.expected_change_pct ASC, fs.confidence_score DESC
+        LIMIT 10
+    """)
+
+
+def render_demand_outlook():
+    """Display the latest persisted forecast without retraining during a UI rerun."""
+    summary = get_latest_forecast_summary()
+    st.subheader("Next-week demand outlook")
+    if summary.empty:
+        st.info("No forecast is available yet. Run `python src/forecast.py` after the ETL completes.")
+        return
+
+    forecast = summary.iloc[0]
+    forecast_week = pd.Timestamp(forecast["forecast_week"])
+    cols = st.columns(2, gap="medium")
+    with cols[0]:
+        render_kpi_card(
+            "Predicted revenue",
+            f"£{forecast['forecast_revenue']:,.0f}",
+            f"Expected completed sales for the week beginning {forecast_week:%d %b %Y}",
+        )
+    with cols[1]:
+        render_kpi_card(
+            "Forecast backtest error",
+            f"{forecast['backtest_wape']:.1f}%",
+            "WAPE on the latest completed week; lower is better.",
+        )
+
+    st.caption(
+        f"{int(forecast['sku_count']):,} active products forecast • "
+        f"{int(forecast['high_risk_skus']):,} high-confidence demand risks"
+    )
+    risks = get_latest_forecast_risks()
+    if risks.empty:
+        st.success("No high-confidence demand declines are predicted for the next week.")
+    else:
+        st.caption("Products expected to decline by at least 20%, where the model has sufficient consistency.")
+        st.dataframe(
+            risks,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Forecast revenue": st.column_config.NumberColumn(format="£%.0f"),
+                "Lower range": st.column_config.NumberColumn(format="£%.0f"),
+                "Upper range": st.column_config.NumberColumn(format="£%.0f"),
+                "Expected change %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Confidence %": st.column_config.NumberColumn(format="%.0f%%"),
+            },
+        )
 
 
 st.title("Retail Decision Dashboard")
@@ -183,9 +300,9 @@ if page == "Selected Period":
     ]
 
     st.subheader("Selected-period snapshot")
-    for row_start in range(0, len(primary_metrics), 4):
-        cols = st.columns(4, gap="small")
-        for idx, (title, value, subtitle, delta) in enumerate(primary_metrics[row_start:row_start + 4]):
+    for row_start in range(0, len(primary_metrics), 2):
+        cols = st.columns(2, gap="medium")
+        for idx, (title, value, subtitle, delta) in enumerate(primary_metrics[row_start:row_start + 2]):
             with cols[idx]:
                 render_kpi_card(title, value, subtitle, delta, "vs. prior year")
 
@@ -197,9 +314,9 @@ if page == "Selected Period":
     ]
 
     st.subheader("Commercial health")
-    for row_start in range(0, len(secondary_metrics), 4):
-        cols = st.columns(4, gap="small")
-        for idx, (title, value, subtitle) in enumerate(secondary_metrics[row_start:row_start + 4]):
+    for row_start in range(0, len(secondary_metrics), 2):
+        cols = st.columns(2, gap="medium")
+        for idx, (title, value, subtitle) in enumerate(secondary_metrics[row_start:row_start + 2]):
             with cols[idx]:
                 render_kpi_card(title, value, subtitle)
 
@@ -207,6 +324,8 @@ if page == "Selected Period":
         f"Gross sales before returns: £{kpis['gross_revenue']:,.0f} • "
         f"Top 10 registered customers account for {concentration:.1f}% of registered-customer revenue."
     )
+
+    render_demand_outlook()
 
     st.subheader("Revenue Over Time")
     trend = run_query(f"""
@@ -316,9 +435,9 @@ else:
     ]
 
     st.subheader("Business snapshot")
-    for row_start in range(0, len(all_time_primary_metrics), 4):
-        cols = st.columns(4, gap="small")
-        for idx, (title, value, subtitle) in enumerate(all_time_primary_metrics[row_start:row_start + 4]):
+    for row_start in range(0, len(all_time_primary_metrics), 2):
+        cols = st.columns(2, gap="medium")
+        for idx, (title, value, subtitle) in enumerate(all_time_primary_metrics[row_start:row_start + 2]):
             with cols[idx]:
                 render_kpi_card(title, value, subtitle)
 
@@ -330,9 +449,9 @@ else:
     ]
 
     st.subheader("Customer growth & retention")
-    for row_start in range(0, len(all_time_customer_metrics), 4):
-        cols = st.columns(4, gap="small")
-        for idx, (title, value, subtitle) in enumerate(all_time_customer_metrics[row_start:row_start + 4]):
+    for row_start in range(0, len(all_time_customer_metrics), 2):
+        cols = st.columns(2, gap="medium")
+        for idx, (title, value, subtitle) in enumerate(all_time_customer_metrics[row_start:row_start + 2]):
             with cols[idx]:
                 render_kpi_card(title, value, subtitle)
 
@@ -344,9 +463,9 @@ else:
     ]
 
     st.subheader("Commercial health")
-    for row_start in range(0, len(all_time_secondary_metrics), 4):
-        cols = st.columns(4, gap="small")
-        for idx, (title, value, subtitle) in enumerate(all_time_secondary_metrics[row_start:row_start + 4]):
+    for row_start in range(0, len(all_time_secondary_metrics), 2):
+        cols = st.columns(2, gap="medium")
+        for idx, (title, value, subtitle) in enumerate(all_time_secondary_metrics[row_start:row_start + 2]):
             with cols[idx]:
                 render_kpi_card(title, value, subtitle)
 
@@ -354,5 +473,6 @@ else:
         f"Gross sales before returns: £{all_time_kpis['gross_revenue']:,.0f} • "
         f"Top 10 registered customers account for {all_time_concentration:.1f}% of registered-customer revenue."
     )
+    render_demand_outlook()
     st.caption("This page includes every year present in the warehouse.")
     st.caption("Use the Selected Period page for date-specific charts and alerts.")

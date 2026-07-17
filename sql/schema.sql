@@ -3,6 +3,8 @@
 -- Safe to re-run: every statement uses IF NOT EXISTS / DROP ... CASCADE.
 
 DROP TABLE IF EXISTS fact_sales CASCADE;
+DROP TABLE IF EXISTS forecast_sales CASCADE;
+DROP TABLE IF EXISTS forecast_run CASCADE;
 DROP TABLE IF EXISTS dim_product CASCADE;
 DROP TABLE IF EXISTS dim_customer CASCADE;
 DROP TABLE IF EXISTS dim_date CASCADE;
@@ -139,3 +141,35 @@ CREATE TABLE alert_log (
     CONSTRAINT unique_margin_alert_per_period
         UNIQUE (alert_type, stock_code, period_end)
 );
+
+-- ---------------------------------------------------------
+-- Forecasts: a versioned, explainable weekly demand forecast per SKU.
+-- Each run is retained so dashboard users can compare forecast runs.
+-- ---------------------------------------------------------
+CREATE TABLE forecast_run (
+    forecast_run_id   BIGSERIAL PRIMARY KEY,
+    created_at        TIMESTAMP NOT NULL DEFAULT NOW(),
+    model_name        VARCHAR(100) NOT NULL,
+    training_end_week DATE NOT NULL,
+    forecast_week     DATE NOT NULL,
+    backtest_wape     NUMERIC(8, 4),
+    sku_count         INT NOT NULL,
+    status            VARCHAR(20) NOT NULL DEFAULT 'completed'
+);
+
+CREATE TABLE forecast_sales (
+    forecast_run_id       BIGINT NOT NULL REFERENCES forecast_run(forecast_run_id) ON DELETE CASCADE,
+    stock_code            VARCHAR(20) NOT NULL REFERENCES dim_product(stock_code),
+    forecast_week         DATE NOT NULL,
+    forecast_revenue      NUMERIC(12, 2) NOT NULL,
+    lower_revenue         NUMERIC(12, 2) NOT NULL,
+    upper_revenue         NUMERIC(12, 2) NOT NULL,
+    prior_four_week_avg   NUMERIC(12, 2) NOT NULL,
+    expected_change_pct   NUMERIC(8, 2),
+    risk_level            VARCHAR(20) NOT NULL DEFAULT 'normal',
+    confidence_score      NUMERIC(5, 4) NOT NULL,
+    PRIMARY KEY (forecast_run_id, stock_code)
+);
+
+CREATE INDEX idx_forecast_sales_week ON forecast_sales(forecast_week);
+CREATE INDEX idx_forecast_sales_risk ON forecast_sales(risk_level);

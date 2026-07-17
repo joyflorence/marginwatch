@@ -26,6 +26,11 @@ jobs:
           DATA_PATH: ${{ secrets.DATA_PATH || 'data/online_retail_ii.xlsx' }}
         run: python src/etl.py
 
+      - name: Create weekly demand forecast
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python src/forecast.py
+
       - name: Run alert check
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

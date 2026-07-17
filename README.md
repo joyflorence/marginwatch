@@ -139,11 +139,26 @@ with. This is disclosed here and should be disclosed in your presentation
 of the project too — it's a stand-in for real cost data, not a claim about
 Meridian Retail's actual margins.
 
+Create the demand forecast after the ETL. It uses a recency-weighted four-week
+baseline per SKU, validates against the most recent completed week, and saves
+both a prediction and an uncertainty range to the warehouse:
+
+```bash
+python src/forecast.py
+```
+
 Then test the alert logic:
 
 ```bash
 python src/check_alerts.py
 ```
+
+The dashboard's **Next-week demand outlook** shows the latest saved forecast,
+its time-based backtest error (WAPE), and only high-confidence products that
+are expected to decline by 20% or more. This dataset is historical
+(2009-2011), so the feature demonstrates the forecasting workflow rather
+than predicting current retail demand. Unit costs and margin figures remain
+simulated; demand forecasts use observed non-return sales revenue.
 
 If nothing is flagged, that's normal — it depends on whether any product's
 margin genuinely dropped more than 15% between the two most recent weeks
