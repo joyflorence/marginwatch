@@ -186,14 +186,54 @@ def get_latest_forecast_risks():
             fs.forecast_revenue AS "Forecast revenue",
             fs.lower_revenue AS "Lower range",
             fs.upper_revenue AS "Upper range",
-            fs.expected_change_pct AS "Expected change %",
-            fs.confidence_score * 100 AS "Confidence %"
+            fs.expected_change_pct AS "Expected change",
+            fs.confidence_score * 100 AS "Confidence"
         FROM forecast_sales fs
         JOIN latest_run lr ON lr.forecast_run_id = fs.forecast_run_id
         JOIN dim_product p ON p.stock_code = fs.stock_code
         WHERE fs.risk_level = 'high'
         ORDER BY fs.expected_change_pct ASC, fs.confidence_score DESC
         LIMIT 10
+    """)
+
+
+def get_latest_forecast_chart():
+    """Return recent actual revenue plus the next aggregated forecast range."""
+    return run_query("""
+        WITH latest_run AS (
+            SELECT forecast_run_id, training_end_week, forecast_week
+            FROM forecast_run
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 1
+        ), actuals AS (
+            SELECT
+                date_trunc('week', f.date_id)::date AS week_start,
+                SUM(f.revenue) AS actual_revenue,
+                NULL::numeric AS forecast_revenue,
+                NULL::numeric AS lower_forecast_range,
+                NULL::numeric AS upper_forecast_range
+            FROM fact_sales f
+            CROSS JOIN latest_run lr
+            WHERE NOT f.is_return
+              AND f.date_id >= lr.training_end_week - INTERVAL '7 weeks'
+              AND f.date_id < lr.forecast_week
+            GROUP BY date_trunc('week', f.date_id)::date
+        ), prediction AS (
+            SELECT
+                lr.forecast_week AS week_start,
+                NULL::numeric AS actual_revenue,
+                SUM(fs.forecast_revenue) AS forecast_revenue,
+                SUM(fs.lower_revenue) AS lower_forecast_range,
+                SUM(fs.upper_revenue) AS upper_forecast_range
+            FROM latest_run lr
+            JOIN forecast_sales fs ON fs.forecast_run_id = lr.forecast_run_id
+            GROUP BY lr.forecast_week
+        )
+        SELECT * FROM actuals
+        UNION ALL
+        SELECT * FROM prediction
+        ORDER BY week_start
     """)
 
 
@@ -225,6 +265,20 @@ def render_demand_outlook():
         f"{int(forecast['sku_count']):,} active products forecast • "
         f"{int(forecast['high_risk_skus']):,} high-confidence demand risks"
     )
+    chart_data = get_latest_forecast_chart()
+    if not chart_data.empty:
+        st.markdown("**Recent revenue and next-week forecast**")
+        st.line_chart(
+            chart_data.rename(columns={
+                "actual_revenue": "Actual revenue",
+                "forecast_revenue": "Forecast revenue",
+                "lower_forecast_range": "Lower forecast range",
+                "upper_forecast_range": "Upper forecast range",
+            }).set_index("week_start"),
+            height=300,
+        )
+        st.caption("The forecast range represents uncertainty; actual revenue will appear after the next data load.")
+
     risks = get_latest_forecast_risks()
     if risks.empty:
         st.success("No high-confidence demand declines are predicted for the next week.")
@@ -238,8 +292,8 @@ def render_demand_outlook():
                 "Forecast revenue": st.column_config.NumberColumn(format="£%.0f"),
                 "Lower range": st.column_config.NumberColumn(format="£%.0f"),
                 "Upper range": st.column_config.NumberColumn(format="£%.0f"),
-                "Expected change %": st.column_config.NumberColumn(format="%.1f%%"),
-                "Confidence %": st.column_config.NumberColumn(format="%.0f%%"),
+                "Expected change": st.column_config.NumberColumn(format="%.1f%%"),
+                "Confidence": st.column_config.NumberColumn(format="%.0f%%"),
             },
         )
 
