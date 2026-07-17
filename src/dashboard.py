@@ -308,7 +308,7 @@ def render_demand_outlook():
 
 
 st.title("Retail Decision Dashboard")
-st.caption("Live view of the warehouse data — refreshes automatically after each pipeline run.")
+st.caption("Live view of the warehouse data — refreshes automatically.")
 
 freshness = get_data_freshness()
 if freshness is not None and pd.notna(freshness["latest_transaction_date"]):
@@ -423,8 +423,7 @@ if page == "Selected Period":
 
     st.subheader("Recent Automated Alerts")
     st.caption(
-        "Margin and forecast checks run automatically after each scheduled ETL job. "
-        "Keeping delivery outside the dashboard prevents a viewer from triggering Slack alerts."
+        "Margin and forecast checks run automatically after each scheduled."
     )
 
     alerts = run_query(f"""
