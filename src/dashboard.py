@@ -100,6 +100,15 @@ def render_kpi_card(title, value, help_text="", delta=None, delta_description=No
         )
 
 
+def render_compact_metrics(metrics):
+    """Show supporting measures without adding another layer of visual cards."""
+    for row_start in range(0, len(metrics), 2):
+        cols = st.columns(2, gap="medium")
+        for idx, (title, value, help_text) in enumerate(metrics[row_start:row_start + 2]):
+            with cols[idx]:
+                st.metric(title, value, help=help_text or None)
+
+
 def percentage_change(current, previous):
     if current is None or previous is None or pd.isna(current) or pd.isna(previous) or previous == 0:
         return None
@@ -366,11 +375,7 @@ if page == "Selected Period":
     ]
 
     st.subheader("Commercial health")
-    for row_start in range(0, len(secondary_metrics), 2):
-        cols = st.columns(2, gap="medium")
-        for idx, (title, value, subtitle) in enumerate(secondary_metrics[row_start:row_start + 2]):
-            with cols[idx]:
-                render_kpi_card(title, value, subtitle)
+    render_compact_metrics(secondary_metrics)
 
     st.caption(
         f"Gross sales before returns: £{kpis['gross_revenue']:,.0f} • "
@@ -496,11 +501,7 @@ else:
     ]
 
     st.subheader("Customer growth & retention")
-    for row_start in range(0, len(all_time_customer_metrics), 2):
-        cols = st.columns(2, gap="medium")
-        for idx, (title, value, subtitle) in enumerate(all_time_customer_metrics[row_start:row_start + 2]):
-            with cols[idx]:
-                render_kpi_card(title, value, subtitle)
+    render_compact_metrics(all_time_customer_metrics)
 
     all_time_secondary_metrics = [
         ("Estimated net margin", f"{all_time_margin_pct:.1f}%", "Estimated profit as a share of net revenue"),
@@ -510,11 +511,7 @@ else:
     ]
 
     st.subheader("Commercial health")
-    for row_start in range(0, len(all_time_secondary_metrics), 2):
-        cols = st.columns(2, gap="medium")
-        for idx, (title, value, subtitle) in enumerate(all_time_secondary_metrics[row_start:row_start + 2]):
-            with cols[idx]:
-                render_kpi_card(title, value, subtitle)
+    render_compact_metrics(all_time_secondary_metrics)
 
     st.caption(
         f"Gross sales before returns: £{all_time_kpis['gross_revenue']:,.0f} • "
