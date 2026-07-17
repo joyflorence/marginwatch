@@ -21,7 +21,7 @@ from db import get_connection, bulk_upsert
 from psycopg2.extras import execute_values
 
 DATA_PATH = os.environ.get("DATA_PATH", "data/online_retail_ii.xlsx")
-# Load all historical years on the first run. Set this to a positive number
+# Loading all historical years on the first run. Set this to a positive number
 # (for example 30) only when demonstrating a staged historical backfill.
 CHUNK_DAYS = int(os.environ.get("CHUNK_DAYS", "0"))
 

@@ -147,6 +147,29 @@ both a prediction and an uncertainty range to the warehouse:
 python src/forecast.py
 ```
 
+### Why this forecasting model?
+
+The first version uses a **recency-weighted four-week baseline** per SKU:
+the most recent sales weeks receive more weight than older weeks. This is a
+deliberately simple, explainable model rather than a claim that it is the
+best model for every retailer. It is appropriate for this project because it
+is fast enough to run automatically for thousands of products, works with
+limited historical data, and makes every prediction easy to audit.
+
+The model is evaluated with a time-based holdout: it uses prior weeks to
+predict the latest completed week and reports weighted absolute percentage
+error (WAPE). Lower WAPE is better. Treat the result as a prioritisation
+signal, not an exact sales commitment; a high error indicates volatile or
+intermittent demand and should not drive inventory or financial decisions by
+itself.
+
+In a production retail system, this baseline should remain as a benchmark or
+fallback. Stable, seasonal products could use seasonal time-series models;
+products with price, promotion, stock, holiday, and lead-time data could use
+feature-based models such as gradient boosting; and intermittent-demand SKUs
+would need specialised demand methods. Any more complex model should only
+replace this baseline after demonstrating a better time-based backtest.
+
 Then test the alert logic:
 
 ```bash
