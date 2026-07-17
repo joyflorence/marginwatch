@@ -29,6 +29,7 @@ def get_weekly_revenue(conn):
         SELECT
             f.stock_code,
             p.description,
+            latest.current_week,
             date_trunc('week', f.date_id)::date AS week_start,
             SUM(f.revenue)::float AS revenue
         FROM fact_sales f
@@ -36,7 +37,8 @@ def get_weekly_revenue(conn):
         CROSS JOIN latest
         WHERE NOT f.is_return
           AND f.date_id < latest.current_week
-        GROUP BY f.stock_code, p.description, date_trunc('week', f.date_id)::date
+        GROUP BY f.stock_code, p.description, latest.current_week,
+                 date_trunc('week', f.date_id)::date
         ORDER BY f.stock_code, week_start
     """
     with conn.cursor() as cur:
@@ -64,7 +66,15 @@ def build_forecasts(weekly_revenue):
         freq="W-MON",
     )
     latest_week = all_weeks[-1]
-    forecast_week = latest_week + pd.Timedelta(days=7)
+    # The source can end mid-week. Keep that partial week out of training and
+    # forecast the following full week, rather than labelling a forecast as a
+    # week that has already begun.
+    current_week = (
+        pd.Timestamp(weekly_revenue["current_week"].iloc[0])
+        if "current_week" in weekly_revenue.columns
+        else latest_week + pd.Timedelta(days=7)
+    )
+    forecast_week = current_week + pd.Timedelta(days=7)
     results = []
     total_absolute_error = 0.0
     total_actual = 0.0
